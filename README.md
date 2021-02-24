@@ -1,9 +1,16 @@
 # N64 ROM Loader for Ghidra by Warranty Voider
 
-this is a loader module for ghidra for N64 roms (.z64, .n64, .v64)
+this is a loader module for ghidra for the Dinosaur Planet ROM
 - fixes endianess (little, big, mixed) at loading
 - loads ram, rom and boot section into ghidra
 - it can use a signature/pattern file to scan for symbol hints for ghidra
+
+Dinosaur Planet specific functionality
+- resolves DLL import tables so that DLL-local code is properly referencing function addresses, strings, and other constants
+- initializes each DLL function named after their DLL, as well as object name if any
+- sets up GP register for each DLL so it can read stuff. the game patches its own assembly for this at runtime
+- does NOT yet process other-DLL imports or exports, this is next
+- also note this is the first thing i wrote in java (and hopefully the last) so apologies for inconsistencies in naming conventions etc.
 
 this allows a rom to be labeled, disassembled and decompiled
 

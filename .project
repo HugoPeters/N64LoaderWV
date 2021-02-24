@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <projectDescription>
-	<name>N64LoaderWV</name>
+	<name>N64Loader_ForDP</name>
 	<comment></comment>
 	<projects>
 	</projects>
@@ -18,7 +18,7 @@
 		<link>
 			<name>Ghidra</name>
 			<type>2</type>
-			<location>C:/Users/wv/Desktop/ghidra</location>
+			<location>C:/Users/Hugo/Downloads/ghidra_9.2.2_PUBLIC_20201229/ghidra_9.2.2_PUBLIC</location>
 		</link>
 	</linkedResources>
 </projectDescription>

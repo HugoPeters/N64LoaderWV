@@ -34,11 +34,14 @@ import ghidra.app.util.opinion.AbstractLibrarySupportLoader;
 import ghidra.app.util.opinion.LoadSpec;
 import ghidra.framework.model.DomainObject;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressOutOfBoundsException;
 import ghidra.program.model.data.DataUtilities;
 import ghidra.program.model.data.Structure;
 import ghidra.program.model.data.DataUtilities.ClearDataMode;
 import ghidra.program.model.lang.LanguageCompilerSpecPair;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.listing.ProgramContext;
+import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.SymbolUtilities;
@@ -84,10 +87,12 @@ public class N64LoaderWVLoader extends AbstractLibrarySupportLoader {
 		}
 	};
 	
+	DPDLLTab dll_tab;
+	DPObjects objects;
 	
 	@Override
 	public String getName() {
-		return "N64 Loader by Warranty Voider";
+		return "N64 Loader for DP by Warranty Voider and Hugo Peters";
 	}
 
 	@Override
@@ -96,27 +101,34 @@ public class N64LoaderWVLoader extends AbstractLibrarySupportLoader {
 		Log.info("N64 Loader: Checking Signature" );
 		BinaryReader br = new BinaryReader(provider, false);
 		int header = br.readInt(0);
-		boolean valid = false;
+		
+		boolean validRom = false;
+		boolean validDPRom = false;
+		
 		switch(header)
 		{
 			case 0x80371240:
 				Log.info( "N64 Loader: Found matching header for big endian" );
-				valid = true;
+				validRom = true;
 				break;
 			case 0x37804012:
 				Log.info( "N64 Loader: Found matching header for mixed endian" );
-				valid = true;
+				validRom = true;
 				break;
 			case 0x40123780:
 				Log.info( "N64 Loader: Found matching header for little endian" );
-				valid = true;
+				validRom = true;
 				break;
 			default:
 				Log.info(String.format("N64 Loader: Found unknown header 0x%08X", header));
 				break;
 		}
-		if(valid)
+		
+		validDPRom = br.readInt(0x3B) == 0x4E445045; // NDPE
+		
+		if(validRom && validDPRom)
 			loadSpecs.add(new LoadSpec(this, 0, new LanguageCompilerSpecPair("MIPS:BE:64:64-32addr", "default"), true));
+		
 		return loadSpecs;
 	}
 
@@ -172,10 +184,21 @@ public class N64LoaderWVLoader extends AbstractLibrarySupportLoader {
 			Log.info("N64 Loader: Creating segment RAM");
 			MakeBlock(program, ".ram", "RAM content", h.loadAddress, bapROM.getInputStream(0x1000),  buffROM.length - 0x1000, "111", null, log, monitor);
 			
+			Log.info("N64-DP Loader: Loading DLL segments");
+			
+			try
+			{
+				MakeDLLBlocks(program, h.loadAddress, bapROM, log, monitor);
+			}
+			catch(Exception ex)
+			{
+				Log.error("N64-DP Loader: Failed to load DLLs");
+			}
+			
 			bapROM.close();
 			
-			if(!((String)options.get(0).getValue()).isEmpty())
-				ScanPatterns(buffROM, h.loadAddress, (String)options.get(0).getValue(), program, monitor);
+			//if(!((String)options.get(0).getValue()).isEmpty())
+				//ScanPatterns(buffROM, h.loadAddress, (String)options.get(0).getValue(), program, monitor);
 			
 			try
 			{
@@ -289,6 +312,47 @@ public class N64LoaderWVLoader extends AbstractLibrarySupportLoader {
 			}catch(Exception ex) {}
 			
 			Log.info("N64 Loader: Done Loading");
+	}
+	
+	public void MakeDLLBlocks(Program program, long loadAddress, ByteArrayProvider s, MessageLog log, TaskMonitor monitor) throws IOException, InvalidInputException, MemoryAccessException, AddressOutOfBoundsException
+	{
+		// TODO: use FST table
+		int offset_DLLS_BIN = 0x38317CC;
+		int size_DLLS_BIN = 0x2D3410;
+		
+		dll_tab = new DPDLLTab();
+		dll_tab.Load(s);
+		
+		objects = new DPObjects();
+		objects.Load(s, dll_tab);
+		
+		Log.info(String.format("DP: Found %d DLLs, %d object mappings", dll_tab.dll_offsets.size(), objects.dllidx_to_objname.size()));
+		
+		int numDllsToLoad = dll_tab.dll_offsets.size();
+		monitor.initialize(numDllsToLoad);
+		monitor.setMessage("Loading Dino DLLs (" + numDllsToLoad + ")...");
+		
+		for (int i = 0; i < numDllsToLoad; ++i)
+		{
+			monitor.setProgress(i);
+			
+			int tabOffset = dll_tab.dll_offsets.get(i);
+			int dllOffset = offset_DLLS_BIN + tabOffset;
+			int dllSize = (i + 1 < dll_tab.dll_offsets.size()) ? (dll_tab.dll_offsets.get(i + 1) - tabOffset) : (size_DLLS_BIN - dllOffset);
+			int dllId = i + 1; // see DPDLLTab for explanation
+			
+			DPDLL dll = new DPDLL(program, dllId, dllOffset, tabOffset, dllSize);
+			
+			try
+			{
+				dll.Load(s, loadAddress, log, monitor, objects);
+				dll.Relocate(s);
+			}
+			catch (Exception ex)
+			{
+				Log.error("Failed to log DLL %d: %s", i, ex.getMessage());
+			}
+		}
 	}
 	
 	public void MakeBlock(Program program, String name, String desc, long address, InputStream s, int size, String flags, Structure struc, MessageLog log, TaskMonitor monitor)
