@@ -69,6 +69,40 @@ public class DPDLLTab
 			dll_offsets.add(dllOffset);
 		}
 	}
+	
+	public int GetDLLRomOffsetFromIndex(int aIndex)
+	{
+		int offset_DLLS_BIN = 0x38317CC;
+		int tabOffset = dll_offsets.get(aIndex);
+		int dllOffset = offset_DLLS_BIN + tabOffset;
+		return dllOffset;
+	}
+	
+	public int GetDLLRomOffsetFromEncodedId(int aId)
+	{
+		int index = DecodeDLLId(aId);
+		return GetDLLRomOffsetFromIndex(index - 1);
+	}
+	
+	public int DecodeDLLId(int aId)
+	{
+		int index = aId;
+		
+		if (aId >= 0x8000)
+		{
+			index = (aId - 0x8000) + dll_banks[3];
+		}
+		else if (aId >= 0x2000)
+		{
+			index = (aId - 0x1FFF) + dll_banks[1];
+		}
+		else if (aId >= 0xFFF)
+		{
+			index = (aId - 0xFFF) + dll_banks[0];
+		}
+		
+		return index;
+	}
 }
 
 

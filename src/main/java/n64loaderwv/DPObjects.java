@@ -72,20 +72,7 @@ public class DPObjects
 			if (dllRawId == 0)
 				continue; // note, -1 in SFA
 			
-			int dllIndex = dllRawId;
-			
-			if (dllRawId >= 0x8000)
-			{
-				dllIndex = (dllRawId - 0x8000) + dlltab.dll_banks[3];
-			}
-			else if (dllRawId >= 0x2000)
-			{
-				dllIndex = (dllRawId - 0x1FFF) + dlltab.dll_banks[1];
-			}
-			else if (dllRawId >= 0xFFF)
-			{
-				dllIndex = (dllRawId - 0xFFF) + dlltab.dll_banks[0];
-			}
+			int dllIndex = dlltab.DecodeDLLId(dllRawId);
 			
 			String objName = handle.readTerminatedString(offsets.get(i) + 0x5F, (char)0);
 			

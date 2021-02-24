@@ -62,6 +62,40 @@ public class DPDLL
 	private long code_address;
 	private long constants_address;
 	private AddressSpace address_space;
+	private int num_funcs;
+	private long load_address;
+	
+	private long MakeRomAddress(int romOffset)
+	{
+		return load_address + (romOffset - 0x1000);
+	}
+	
+	private int GetHeaderFuncOffset(int idx)
+	{
+		return dll_rom_offset + 16 + 4 * idx;
+	}
+	
+	private long GetFunctionAddress(int idx)
+	{
+		// every(?) DLL function starts with some code that's patched by the game
+		// it sets up the gp register for the function
+		// atm we just set the register value, we could also patch the instructions
+		int addFuncOffset = 0xC;
+		
+		long funcAddr = code_address + hdr_func_offsets.get(idx) + addFuncOffset;
+		
+		return funcAddr;
+	}
+	
+	// move to some utility thing
+	private static void MakeConstantPtr(Program p, Address addr) throws CodeUnitInsertionException
+	{
+		Data d = DataUtilities.createData(p, addr, PointerDataType.dataType, -1, false,
+				ClearDataMode.CLEAR_ALL_UNDEFINED_CONFLICT_DATA);
+
+		// you have no idea how long it took me to find how to fucking set this property
+		MutabilitySettingsDefinition.DEF.setChoice(d, MutabilitySettingsDefinition.CONSTANT);
+	}
 	
 	public DPDLL(Program aProgram, int aId, int aRomStartOffset, int aTabOffset, int aSize) 
 	{
@@ -76,6 +110,8 @@ public class DPDLL
 	
 	public void Load(ByteArrayProvider s, long loadAddress, MessageLog log, TaskMonitor monitor, DPObjects objects) throws IOException, InvalidInputException
 	{
+		load_address = loadAddress;
+		
 		BinaryReader handle = new BinaryReader(s, false);
 		
 		handle.setPointerIndex(dll_rom_offset);
@@ -88,19 +124,19 @@ public class DPDLL
 		constants_offset = dll_rom_offset + hdr_offset_constants;
 		constants_size = hdr_offset_data2 - hdr_offset_constants;
 		
-		int numFuncs = (hdr_size - 16) / 4;
+		num_funcs = (hdr_size - 16) / 4;
 
-		for (int i = 0; i < numFuncs; ++i)
+		for (int i = 0; i < num_funcs; ++i)
 		{
-			int funcOffs = handle.readInt(dll_rom_offset + 16 + 4 * i);
+			int funcOffs = handle.readInt(GetHeaderFuncOffset(i));
 			hdr_func_offsets.add(funcOffs);
 		}
 		
 		Log.info(String.format("DP: DLL %d @ 0x%08X: %d functions", dll_id, dll_rom_offset, hdr_func_offsets.size()));
 
-		dll_address = loadAddress + (dll_rom_offset - 0x1000);
-		code_address = loadAddress + (code_offset - 0x1000);
-		constants_address = loadAddress + (dll_rom_offset + hdr_offset_constants - 0x1000);
+		dll_address = MakeRomAddress(dll_rom_offset);
+		code_address = MakeRomAddress(code_offset);
+		constants_address = MakeRomAddress(dll_rom_offset + hdr_offset_constants);
 		
 		String dllIdentifier = String.format("dll_%03d", dll_id);
 		String dllBlockName = dllIdentifier;
@@ -110,6 +146,15 @@ public class DPDLL
 		{
 			usedObjectName = objects.dllidx_to_objname.get(dll_id);
 			dllBlockName += String.format("_obj.%s", usedObjectName);
+		}
+		else
+		{
+			String globalDllName = DPGlobalDLLTable.GetGlobalDLLName(dll_id);
+			
+			if (globalDllName != null)
+			{
+				dllBlockName += String.format(".%s", globalDllName);
+			}
 		}
 		
 		try
@@ -152,17 +197,12 @@ public class DPDLL
 			Msg.error(this, ExceptionUtils.getStackTrace(e));
 		}
 		
-		for (int j = 0; j < numFuncs; ++j)
+		for (int j = 0; j < num_funcs; ++j)
 		{
 			if (j > 0 && hdr_func_offsets.get(j) == 0x0)
 				continue; // nullfunc
 			
-			// every(?) DLL function starts with some code that's patched by the game
-			// it sets up the gp register for the function
-			// atm we just set the register value, we could also patch the instructions
-			int addFuncOffset = 0xC;
-			
-			long funcAddr = code_address + hdr_func_offsets.get(j) + addFuncOffset;
+			long funcAddr = GetFunctionAddress(j);
 			String funcName = String.format("%s_func_%04d", dllBlockName, j);
 			
 			Address addr = address_space.getAddress(funcAddr);
@@ -177,6 +217,16 @@ public class DPDLL
 
 		Memory mem = program.getMemory();
 		ProgramContext ctx = program.getProgramContext();
+		
+		// patch the function offsets to address of the func in the rom
+		for (int i = 0; i < num_funcs; ++i)
+		{
+			long offsetAddr = MakeRomAddress(GetHeaderFuncOffset(i));
+			long funcAddress = GetFunctionAddress(i);
+			Address writeAddr = address_space.getAddress(offsetAddr);
+			mem.setInt(writeAddr, (int)funcAddress);
+			MakeConstantPtr(program, writeAddr);
+		}
 
 		long dataAddress = dll_address + hdr_offset_constants;
 		long writeAddress = dataAddress - 4;
@@ -215,12 +265,7 @@ public class DPDLL
 			Address targetAddr = address_space.getAddress(writeAddress);
 			
 			mem.setInt(targetAddr, (int)writeValue);
-			
-			Data d = DataUtilities.createData(program, targetAddr, PointerDataType.dataType, -1, false,
-					ClearDataMode.CLEAR_ALL_UNDEFINED_CONFLICT_DATA);
-			
-			// you have no idea how long it took me to find how to fucking set this property
-			MutabilitySettingsDefinition.DEF.setChoice(d, MutabilitySettingsDefinition.CONSTANT);
+			MakeConstantPtr(program, targetAddr);
 		}
 		
 		while (true)
@@ -230,7 +275,7 @@ public class DPDLL
 			if (val == -3)
 				break;
 			
-			// TODO
+			// this table is used for patching the GP register values, offsets to functions that need it
 		}
 		
 		while (true)
@@ -240,7 +285,7 @@ public class DPDLL
 			if (val == -1)
 				break;
 			
-			// TODO
+			// offsets into the DLL to tables of more values?
 		}
 		
 		// end of table

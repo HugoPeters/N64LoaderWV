@@ -45,6 +45,7 @@ import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.SymbolUtilities;
+import ghidra.program.model.util.CodeUnitInsertionException;
 import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.InvalidInputException;
@@ -314,18 +315,22 @@ public class N64LoaderWVLoader extends AbstractLibrarySupportLoader {
 			Log.info("N64 Loader: Done Loading");
 	}
 	
-	public void MakeDLLBlocks(Program program, long loadAddress, ByteArrayProvider s, MessageLog log, TaskMonitor monitor) throws IOException, InvalidInputException, MemoryAccessException, AddressOutOfBoundsException
+	public void MakeDLLBlocks(Program program, long loadAddress, ByteArrayProvider s, MessageLog log, TaskMonitor monitor) throws IOException, InvalidInputException, MemoryAccessException, AddressOutOfBoundsException, CodeUnitInsertionException
 	{
 		// TODO: use FST table
-		int offset_DLLS_BIN = 0x38317CC;
 		int size_DLLS_BIN = 0x2D3410;
 		
+		Log.info("DP: Loading DLL table data");
 		dll_tab = new DPDLLTab();
 		dll_tab.Load(s);
 		
+		Log.info("DP: Loading objects data");
 		objects = new DPObjects();
 		objects.Load(s, dll_tab);
 		
+		Log.info("DP: Creating global DLL redirection table");
+		DPGlobalDLLTable.Build(program, dll_tab, loadAddress);
+	
 		Log.info(String.format("DP: Found %d DLLs, %d object mappings", dll_tab.dll_offsets.size(), objects.dllidx_to_objname.size()));
 		
 		int numDllsToLoad = dll_tab.dll_offsets.size();
@@ -337,7 +342,7 @@ public class N64LoaderWVLoader extends AbstractLibrarySupportLoader {
 			monitor.setProgress(i);
 			
 			int tabOffset = dll_tab.dll_offsets.get(i);
-			int dllOffset = offset_DLLS_BIN + tabOffset;
+			int dllOffset = dll_tab.GetDLLRomOffsetFromIndex(i);
 			int dllSize = (i + 1 < dll_tab.dll_offsets.size()) ? (dll_tab.dll_offsets.get(i + 1) - tabOffset) : (size_DLLS_BIN - dllOffset);
 			int dllId = i + 1; // see DPDLLTab for explanation
 			
