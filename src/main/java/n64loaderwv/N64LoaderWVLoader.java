@@ -333,7 +333,7 @@ public class N64LoaderWVLoader extends AbstractLibrarySupportLoader {
 	
 		Log.info(String.format("DP: Found %d DLLs, %d object mappings", dll_tab.dll_offsets.size(), objects.dllidx_to_objname.size()));
 		
-		int numDllsToLoad = dll_tab.dll_offsets.size();
+		int numDllsToLoad = dll_tab.dll_offsets.size() - 1;
 		monitor.initialize(numDllsToLoad);
 		monitor.setMessage("Loading Dino DLLs (" + numDllsToLoad + ")...");
 		
@@ -343,7 +343,7 @@ public class N64LoaderWVLoader extends AbstractLibrarySupportLoader {
 			
 			int tabOffset = dll_tab.dll_offsets.get(i);
 			int dllOffset = dll_tab.GetDLLRomOffsetFromIndex(i);
-			int dllSize = (i + 1 < dll_tab.dll_offsets.size()) ? (dll_tab.dll_offsets.get(i + 1) - tabOffset) : (size_DLLS_BIN - dllOffset);
+			int dllSize = dll_tab.dll_offsets.get(i + 1) - tabOffset;
 			int dllId = i + 1; // see DPDLLTab for explanation
 			
 			DPDLL dll = new DPDLL(program, dllId, dllOffset, tabOffset, dllSize);

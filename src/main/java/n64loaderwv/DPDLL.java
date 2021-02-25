@@ -53,36 +53,34 @@ public class DPDLL
 	public int hdr_offset_data2;
 	public int hdr_offset_constants; // includes import/export function table
 	public short hdr_unk1;
-	List<Integer> hdr_func_offsets;
 	public int code_offset;
 	public int code_size;
 	public int constants_offset;
-	public int constants_size;
 	private long dll_address;
 	private long code_address;
-	private long constants_address;
 	private AddressSpace address_space;
-	private int num_funcs;
 	private long load_address;
+	public String dll_identifier;
+	public String dll_block_name;
 	
 	private long MakeRomAddress(int romOffset)
 	{
 		return load_address + (romOffset - 0x1000);
 	}
 	
-	private int GetHeaderFuncOffset(int idx)
+	private int GetHeaderExportFuncOffset(int idx)
 	{
 		return dll_rom_offset + 16 + 4 * idx;
 	}
 	
-	private long GetFunctionAddress(int idx)
+	private long GetFunctionAddress(int aOffset)
 	{
 		// every(?) DLL function starts with some code that's patched by the game
 		// it sets up the gp register for the function
 		// atm we just set the register value, we could also patch the instructions
-		int addFuncOffset = 0xC;
+		int addFuncOffset = 0;// aIsExport ? 0xC : 0;
 		
-		long funcAddr = code_address + hdr_func_offsets.get(idx) + addFuncOffset;
+		long funcAddr = code_address + aOffset + addFuncOffset;
 		
 		return funcAddr;
 	}
@@ -100,7 +98,6 @@ public class DPDLL
 	public DPDLL(Program aProgram, int aId, int aRomStartOffset, int aTabOffset, int aSize) 
 	{
 		program = aProgram;
-		hdr_func_offsets = new ArrayList<Integer>();
 		dll_id = aId;
 		dll_rom_offset = aRomStartOffset;
 		dll_tab_offset = aTabOffset;
@@ -116,36 +113,27 @@ public class DPDLL
 		
 		handle.setPointerIndex(dll_rom_offset);
 		hdr_size = handle.readNextInt();
-		hdr_offset_data2 = handle.readNextInt();
+		hdr_offset_data2 = handle.readNextInt(); // can be -1
 		hdr_offset_constants = handle.readNextInt();
 		hdr_unk1 = handle.readNextShort();
 		code_offset = dll_rom_offset + hdr_size;
 		code_size = dll_size - hdr_size;
 		constants_offset = dll_rom_offset + hdr_offset_constants;
-		constants_size = hdr_offset_data2 - hdr_offset_constants;
 		
-		num_funcs = (hdr_size - 16) / 4;
-
-		for (int i = 0; i < num_funcs; ++i)
-		{
-			int funcOffs = handle.readInt(GetHeaderFuncOffset(i));
-			hdr_func_offsets.add(funcOffs);
-		}
-		
-		Log.info(String.format("DP: DLL %d @ 0x%08X: %d functions", dll_id, dll_rom_offset, hdr_func_offsets.size()));
+		Log.info(String.format("DP: DLL %d @ 0x%08X", dll_id, dll_rom_offset));
 
 		dll_address = MakeRomAddress(dll_rom_offset);
 		code_address = MakeRomAddress(code_offset);
-		constants_address = MakeRomAddress(dll_rom_offset + hdr_offset_constants);
+		//constants_address = MakeRomAddress(dll_rom_offset + hdr_offset_constants);
 		
-		String dllIdentifier = String.format("dll_%03d", dll_id);
-		String dllBlockName = dllIdentifier;
+		dll_identifier = String.format("dll_%03d", dll_id);
+		dll_block_name = dll_identifier;
 		String usedObjectName = null;
 		
 		if (objects.dllidx_to_objname.containsKey(dll_id))
 		{
 			usedObjectName = objects.dllidx_to_objname.get(dll_id);
-			dllBlockName += String.format("_obj.%s", usedObjectName);
+			dll_block_name += String.format("_obj.%s", usedObjectName);
 		}
 		else
 		{
@@ -153,7 +141,7 @@ public class DPDLL
 			
 			if (globalDllName != null)
 			{
-				dllBlockName += String.format(".%s", globalDllName);
+				dll_block_name += String.format(".%s", globalDllName);
 			}
 		}
 		
@@ -163,7 +151,7 @@ public class DPDLL
 											, dll_id, usedObjectName != null ? usedObjectName : "NONE", dll_rom_offset, dll_tab_offset, 0x10 + dll_id * 8);
 			
 			MemoryBlockUtils.createInitializedBlock(
-					program, false, "." + dllBlockName, address_space.getAddress(code_address), 
+					program, false, "." + dll_block_name, address_space.getAddress(code_address), 
 					s.getInputStream(code_offset), code_size, dllBlockDesc, 
 					null, true, true, true, log, monitor);
 			
@@ -196,36 +184,45 @@ public class DPDLL
 		{
 			Msg.error(this, ExceptionUtils.getStackTrace(e));
 		}
+	}
+	
+	private class FuncInfo
+	{
+		public boolean is_export;
+		public boolean is_local;
+		public int dll_offset;
 		
-		for (int j = 0; j < num_funcs; ++j)
+		public FuncInfo(boolean aIsExport, boolean aIsLocal, int aOffset)
 		{
-			if (j > 0 && hdr_func_offsets.get(j) == 0x0)
-				continue; // nullfunc
-			
-			long funcAddr = GetFunctionAddress(j);
-			String funcName = String.format("%s_func_%04d", dllBlockName, j);
-			
-			Address addr = address_space.getAddress(funcAddr);
-			program.getSymbolTable().addExternalEntryPoint(addr);
-		    program.getSymbolTable().createLabel(addr, funcName, SourceType.ANALYSIS);
+			is_export = aIsExport;
+			is_local = aIsLocal;
+			dll_offset = aOffset;
 		}
 	}
 	
-	public void Relocate(ByteArrayProvider s) throws IOException, MemoryAccessException, AddressOutOfBoundsException, ContextChangeException, CodeUnitInsertionException
+	public void Relocate(ByteArrayProvider s) throws IOException, MemoryAccessException, AddressOutOfBoundsException, ContextChangeException, CodeUnitInsertionException, InvalidInputException
 	{
 		BinaryReader handle = new BinaryReader(s, false);
 
 		Memory mem = program.getMemory();
 		ProgramContext ctx = program.getProgramContext();
 		
-		// patch the function offsets to address of the func in the rom
-		for (int i = 0; i < num_funcs; ++i)
+		List<FuncInfo> functions = new ArrayList<FuncInfo>();
+		
+		// patch the export function offsets to address of the func in the rom
+		int num_exports = (hdr_size - 16) / 4;
+		
+		for (int i = 0; i < num_exports; ++i)
 		{
-			long offsetAddr = MakeRomAddress(GetHeaderFuncOffset(i));
-			long funcAddress = GetFunctionAddress(i);
+			int exportOffset = GetHeaderExportFuncOffset(i);
+			long offsetAddr = MakeRomAddress(exportOffset);
+			int funcOffset = handle.readInt(exportOffset);
+			long funcAddress = GetFunctionAddress(funcOffset);
 			Address writeAddr = address_space.getAddress(offsetAddr);
 			mem.setInt(writeAddr, (int)funcAddress);
 			MakeConstantPtr(program, writeAddr);
+			
+			functions.add(new FuncInfo(true, false, funcOffset));
 		}
 
 		long dataAddress = dll_address + hdr_offset_constants;
@@ -240,6 +237,7 @@ public class DPDLL
 		
 		int rom_DLLSIMPORTTAB_offset = 0x3B064DC;
 		
+		// imports table
 		while (true)
 		{
 			writeAddress += 4;
@@ -268,6 +266,7 @@ public class DPDLL
 			MakeConstantPtr(program, targetAddr);
 		}
 		
+		// function table
 		while (true)
 		{
 			int val = handle.readNextInt();
@@ -275,7 +274,20 @@ public class DPDLL
 			if (val == -3)
 				break;
 			
-			// this table is used for patching the GP register values, offsets to functions that need it
+			boolean hasFunc = false;
+			for (int i = 0; i < functions.size() && !hasFunc; ++i)
+			{
+				if (functions.get(i).dll_offset == val)
+				{
+					hasFunc = true;
+					functions.get(i).is_local = true;
+				}
+			}
+			
+			if (!hasFunc)
+			{
+				functions.add(new FuncInfo(false, true, val));
+			}
 		}
 		
 		while (true)
@@ -289,6 +301,40 @@ public class DPDLL
 		}
 		
 		// end of table
+		
+		// create functions
+		short dataAddressHi = (short)((dataAddress >> 0x10) & 0xFFFF);
+		short dataAddressLo = (short)(dataAddress & 0xFFFF);
+		
+		for (int i = 0; i < functions.size(); ++i)
+		{
+			FuncInfo info = functions.get(i);
+			String funcStrFlags = "";
+			
+			if (info.is_local)
+				funcStrFlags += "L";
+			if (info.is_export)
+				funcStrFlags += "E";
+
+			String funcName = String.format("%s_func_%04d", dll_block_name, i);
+			
+			if (funcStrFlags.length() > 0)
+				funcName += "_" + funcStrFlags;
+			
+			Address addr = address_space.getAddress(GetFunctionAddress(info.dll_offset));
+		    program.getSymbolTable().createLabel(addr, funcName, SourceType.ANALYSIS);
+			program.getSymbolTable().addExternalEntryPoint(addr);
+		    
+		    if (info.is_local)
+		    {
+		    	// patch the GP register instructions at the start of the function
+		    	// the game does this as well at runtime
+		    	Address loadInstrPatchAddr = addr.add(2);
+		    	Address orInstrPatchAddr = addr.add(6);
+		    	mem.setShort(loadInstrPatchAddr, dataAddressHi);
+		    	mem.setShort(orInstrPatchAddr, dataAddressLo);
+		    }
+		}
 	}
 }
 
