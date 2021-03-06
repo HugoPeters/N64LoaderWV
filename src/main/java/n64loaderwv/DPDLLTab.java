@@ -36,12 +36,13 @@ public class DPDLLTab
 {
 	public int[] dll_banks;
 	public List<Integer> dll_offsets;
-	
+	public List<Integer> dll_bss_sizes;
+
 	public void Load(ByteArrayProvider s) throws IOException, InvalidInputException
 	{
 		BinaryReader handle = new BinaryReader(s, false);
 		
-		int offset_DLLS_TAB = 0x3B04BDC;
+		int offset_DLLS_TAB = DPFST.offsets.get(71);
 		
 		// read tab
 		handle.setPointerIndex(offset_DLLS_TAB);
@@ -51,28 +52,38 @@ public class DPDLLTab
 		dll_banks[1] = handle.readNextInt();
 		dll_banks[2] = handle.readNextInt();
 		dll_banks[3] = handle.readNextInt();
-		
-		// according to the game the first dll actually starts at 0x8 but this is bank data
-		// not sure why
-		// ignore this and just make correct offsets, we fix the ID later by just adding 1
-		
+
 		dll_offsets = new ArrayList<Integer>();
-		
+		dll_bss_sizes = new ArrayList<Integer>();
+
 		while (true) 
 		{
 			int dllOffset = handle.readNextInt();
-			int dllUnk = handle.readNextInt();
+			int dllBss = handle.readNextInt();
 			
-			if (dllOffset == -1 && dllUnk == -1)
+			if (dllOffset == -1 && dllBss == -1)
 				break;
 			
 			dll_offsets.add(dllOffset);
+			dll_bss_sizes.add(dllBss);
 		}
+	}
+
+	public int GetDLLBssSizeFromIndex(int aIndex)
+	{
+		int dllBss = dll_bss_sizes.get(aIndex);
+		return dllBss;
+	}
+
+	public int GetDLLBssSizeFromEncodedId(int aId)
+	{
+		int index = DecodeDLLId(aId);
+		return GetDLLBssSizeFromIndex(index - 1);
 	}
 	
 	public int GetDLLRomOffsetFromIndex(int aIndex)
 	{
-		int offset_DLLS_BIN = 0x38317CC;
+		int offset_DLLS_BIN = DPFST.offsets.get(70);
 		int tabOffset = dll_offsets.get(aIndex);
 		int dllOffset = offset_DLLS_BIN + tabOffset;
 		return dllOffset;
