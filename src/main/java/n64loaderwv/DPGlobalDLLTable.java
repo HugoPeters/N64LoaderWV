@@ -159,15 +159,25 @@ public class DPGlobalDLLTable
 		dll_names = new HashMap<Integer, String>();
 
 		long redirectionBlockAddress = 0x80800000;
-		long dllAddress = 0x81000000;
-		
+
 		for (int i = 0; i < infos.length; ++i)
 		{
 			Info info = infos[i];
-			Address addrDllEntry = addrSpace.getAddress(dllAddress + 0x18);
-			
 			int dllId = aTab.DecodeDLLId(info.dll_id);
 			
+			long dllAddress = 0x81000000;
+			for (int j = 1; j < dllId; j++)
+			{
+				int tabOffset = aTab.dll_offsets.get(j - 1);
+				int dllBss = aTab.dll_bss_sizes.get(j - 1);
+				int dllSize = aTab.dll_offsets.get(j) - tabOffset;
+
+				dllAddress += dllSize + dllBss;
+				dllAddress = Utils.align(dllAddress, 0x1000);
+			}
+
+			Address addrDllEntry = addrSpace.getAddress(dllAddress + 0x18);
+
 			// write the redirection table entry
 			Address addrRedirTableEntry = redirSpace.getAddress(redirectionBlockAddress + i * 4);
 			mem.setInt(addrRedirTableEntry, (int)addrDllEntry.getOffset());
@@ -192,13 +202,6 @@ public class DPGlobalDLLTable
 			}
 			
 			aProgram.getSymbolTable().createLabel(addrGlobal, globalName, SourceType.ANALYSIS);
-
-			int tabOffset = aTab.dll_offsets.get(dllId - 1);
-			int dllBss = aTab.dll_bss_sizes.get(dllId - 1);
-			int dllSize = aTab.dll_offsets.get(dllId) - tabOffset;
-
-			dllAddress += dllSize + dllBss;
-			dllAddress = Utils.align(dllAddress, 0x1000);
 		}
 	}
 }
