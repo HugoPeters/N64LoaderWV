@@ -41,8 +41,8 @@ public class DPObjects
 	{
 		BinaryReader handle = new BinaryReader(s, false);
 		
-		int rom_OBJECTS_BIN_offset = 0x37EEB42; 
-		int rom_OBJECTS_TAB_offset = 0X37ED766;
+		int rom_OBJECTS_BIN_offset = DPFST.offsets.get(66);
+		int rom_OBJECTS_TAB_offset = DPFST.offsets.get(65);
 		
 		// read tab
 		List<Integer> offsets = new ArrayList<Integer>();

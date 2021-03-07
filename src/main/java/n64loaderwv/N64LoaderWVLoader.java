@@ -15,12 +15,14 @@
  */
 package n64loaderwv;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
 
+import org.apache.commons.io.output.ByteArrayOutputStream;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.python.jline.internal.Log;
 
@@ -35,6 +37,8 @@ import ghidra.app.util.opinion.LoadSpec;
 import ghidra.framework.model.DomainObject;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressOutOfBoundsException;
+import ghidra.program.model.address.AddressOverflowException;
+import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.data.DataUtilities;
 import ghidra.program.model.data.Structure;
 import ghidra.program.model.data.DataUtilities.ClearDataMode;
@@ -50,6 +54,9 @@ import ghidra.util.Msg;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.InvalidInputException;
 import ghidra.util.task.TaskMonitor;
+
+import n64loaderwv.DPFST;
+import n64loaderwv.Utils;
 
 public class N64LoaderWVLoader extends AbstractLibrarySupportLoader {
 
@@ -93,7 +100,7 @@ public class N64LoaderWVLoader extends AbstractLibrarySupportLoader {
 	
 	@Override
 	public String getName() {
-		return "N64 Loader for DP by Warranty Voider and Hugo Peters";
+		return "N64 Loader for DP by Warranty Voider, Hugo Peters and nuggs";
 	}
 
 	@Override
@@ -182,14 +189,30 @@ public class N64LoaderWVLoader extends AbstractLibrarySupportLoader {
 			Log.info("N64 Loader: Creating segment BOOT");
 			MakeBlock(program, ".boot", "ROM bootloader", 0xA4000040, bapROM.getInputStream(0x40),  0xFC0, "111", null, log, monitor);
 
-			Log.info("N64 Loader: Creating segment RAM");
-			MakeBlock(program, ".ram", "RAM content", h.loadAddress, bapROM.getInputStream(0x1000),  buffROM.length - 0x1000, "111", null, log, monitor);
-			
-			Log.info("N64-DP Loader: Loading DLL segments");
-			
+			Log.info("N64-DP Loader: Loading FST");
 			try
 			{
-				MakeDLLBlocks(program, h.loadAddress, bapROM, log, monitor);
+				DPFST.Load(bapROM, (int) options.get(1).getValue());
+			}
+			catch(Exception ex)
+			{
+				Log.error("N64-DP Loader: Failed to load FST");
+			}
+
+			Log.info("N64 Loader: Creating segment RAM");
+			
+			ByteArrayOutputStream outStream = new ByteArrayOutputStream();
+			outStream.write(bapROM.readBytes(0x1000, DPFST.offsets.get(0) - 0x1000));
+			outStream.write(new byte[0x7FFC00 - (DPFST.offsets.get(0) - 0x1000)]);
+			byte[] data = outStream.toByteArray();
+			InputStream inStream = new ByteArrayInputStream(data);
+
+			MakeBlock(program, ".ram", "RAM content", h.loadAddress, inStream,  0x7FFC00, "111", null, log, monitor);
+			
+			Log.info("N64-DP Loader: Loading DLL segments");
+			try
+			{
+				MakeDLLBlocks(program, h.loadAddress, h.loadAddress + DPFST.offsets.get(0), bapROM, log, monitor);
 			}
 			catch(Exception ex)
 			{
@@ -315,10 +338,9 @@ public class N64LoaderWVLoader extends AbstractLibrarySupportLoader {
 			Log.info("N64 Loader: Done Loading");
 	}
 	
-	public void MakeDLLBlocks(Program program, long loadAddress, ByteArrayProvider s, MessageLog log, TaskMonitor monitor) throws IOException, InvalidInputException, MemoryAccessException, AddressOutOfBoundsException, CodeUnitInsertionException
+	public void MakeDLLBlocks(Program program, long loadAddress, long endAddress, ByteArrayProvider s, MessageLog log, TaskMonitor monitor) throws IOException, InvalidInputException, MemoryAccessException, AddressOutOfBoundsException, CodeUnitInsertionException, AddressOverflowException
 	{
-		// TODO: use FST table
-		int size_DLLS_BIN = 0x2D3410;
+		int size_DLLS_BIN = DPFST.offsets.get(71) - DPFST.offsets.get(70);
 		
 		Log.info("DP: Loading DLL table data");
 		dll_tab = new DPDLLTab();
@@ -329,34 +351,41 @@ public class N64LoaderWVLoader extends AbstractLibrarySupportLoader {
 		objects.Load(s, dll_tab);
 		
 		Log.info("DP: Creating global DLL redirection table");
-		DPGlobalDLLTable.Build(program, dll_tab, loadAddress);
+		DPGlobalDLLTable.Build(program, dll_tab, loadAddress, log, monitor);
 	
-		Log.info(String.format("DP: Found %d DLLs, %d object mappings", dll_tab.dll_offsets.size(), objects.dllidx_to_objname.size()));
-		
 		int numDllsToLoad = dll_tab.dll_offsets.size() - 1;
+		Log.info(String.format("DP: Found %d DLLs, %d object mappings", numDllsToLoad, objects.dllidx_to_objname.size()));
+
 		monitor.initialize(numDllsToLoad);
 		monitor.setMessage("Loading Dino DLLs (" + numDllsToLoad + ")...");
+
+		long dllAddress = 0x81000000;
 		
 		for (int i = 0; i < numDllsToLoad; ++i)
 		{
 			monitor.setProgress(i);
 			
 			int tabOffset = dll_tab.dll_offsets.get(i);
+			int dllBss = dll_tab.dll_bss_sizes.get(i);
 			int dllOffset = dll_tab.GetDLLRomOffsetFromIndex(i);
 			int dllSize = dll_tab.dll_offsets.get(i + 1) - tabOffset;
-			int dllId = i + 1; // see DPDLLTab for explanation
+			int dllId = i + 1; // DLLs begin at index 1 - otherwise half of the bank header is interpreted as a DLL entry
 			
-			DPDLL dll = new DPDLL(program, dllId, dllOffset, tabOffset, dllSize);
+			DPDLL dll = new DPDLL(program, dllId, dllOffset, tabOffset, dllBss, dllSize);
 			
 			try
 			{
-				dll.Load(s, loadAddress, log, monitor, objects);
+				dll.Load(s, dllAddress, log, monitor, objects);
 				dll.Relocate(s);
 			}
 			catch (Exception ex)
 			{
-				Log.error("Failed to log DLL %d: %s", i, ex.getMessage());
+				Log.error(String.format("Failed to load DLL %d: %s", i, ex.getMessage()));
+				Log.error(ExceptionUtils.getStackTrace(ex));
 			}
+
+			dllAddress += dllSize + dllBss;
+			dllAddress = Utils.align(dllAddress, 0x1000);
 		}
 	}
 	
@@ -467,6 +496,7 @@ public class N64LoaderWVLoader extends AbstractLibrarySupportLoader {
 			DomainObject domainObject, boolean isLoadIntoProgram) {
 		List<Option> list = new ArrayList<Option>();
 		list.add(new Option("Signature file", ""));
+		list.add(new Option("FST offset", 0xA4970));
 		return list;
 	}
 
